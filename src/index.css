@@ -1,0 +1,49 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-headline: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  
+  --color-background: #131313;
+  --color-surface: #131313;
+  --color-surface-low: #1C1B1B;
+  --color-surface-container: #201F1F;
+  --color-surface-high: #2A2A2A;
+  --color-surface-highest: #353534;
+  
+  --color-primary: #D32F2F;
+  --color-primary-container: #D32F2F;
+  --color-on-primary: #FFFFFF;
+  
+  --color-secondary: #ffb3ac;
+  --color-tertiary: #7bd1f8;
+  
+  --color-outline: #ab8985;
+  --color-outline-variant: #5b403d;
+  
+  --radius-none: 0px;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-white font-body antialiased;
+  }
+}
+
+@layer components {
+  .glass-hud {
+    @apply bg-[#201F1F]/60 backdrop-blur-md border border-white/10;
+  }
+  
+  .signal-gradient {
+    background: linear-gradient(135deg, #D32F2F 0%, #832A26 100%);
+  }
+  
+  .kinetic-bg {
+    background-image: radial-gradient(circle at 2px 2px, rgba(211, 47, 47, 0.05) 1px, transparent 0);
+    background-size: 32px 32px;
+  }
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
