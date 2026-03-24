@@ -1,25 +1,23 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Database, Grid, Lock, Verified, Shield, History, UserPlus, Trash2, Edit2, User, Search, Filter, ShieldCheck } from 'lucide-react';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { MOCK_BLOCKS, MOCK_TRANSACTIONS } from '../constants';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 interface UserData {
   id: string;
+  operator_id: string;
   name: string;
   email: string;
   role: 'ADMIN' | 'OPERATOR';
   status: 'ACTIVE' | 'SUSPENDED';
 }
 
-const INITIAL_USERS: UserData[] = [
-  { id: 'DB_ADMIN_01', name: 'Rita Saraiva', email: 'ritadbsaraiva@gmail.com', role: 'ADMIN', status: 'ACTIVE' },
-  { id: 'DB_OP_02', name: 'Marcus Viana', email: 'viana.m@kinetic.io', role: 'OPERATOR', status: 'ACTIVE' },
-];
-
 export const ExplorerView = () => {
   const [viewMode, setViewMode] = useState<'explorer' | 'admin'>('explorer');
-  const [users, setUsers] = useState<UserData[]>(INITIAL_USERS);
+  const [users, setUsers] = useState<UserData[]>([]);
+  const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserData | null>(null);
   const [formData, setFormData] = useState<Partial<UserData>>({
@@ -30,6 +28,42 @@ export const ExplorerView = () => {
   });
 
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) {
+      setLoading(false);
+      return;
+    }
+
+    fetchUsers();
+    
+    const subscription = supabase
+      .channel('public:users_explorer')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => {
+        fetchUsers();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(subscription);
+    };
+  }, []);
+
+  const fetchUsers = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setUsers(data || []);
+    } catch (error) {
+      console.error('Error fetching users:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleOpenModal = (user?: UserData) => {
     if (user) {
@@ -42,27 +76,58 @@ export const ExplorerView = () => {
     setIsModalOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingUser) {
-      setUsers(users.map(u => u.id === editingUser.id ? { ...u, ...formData } as UserData : u));
-    } else {
-      const newUser: UserData = {
-        id: `DB_USER_${(users.length + 1).toString().padStart(2, '0')}`,
-        name: formData.name || '',
-        email: formData.email || '',
-        role: formData.role as 'ADMIN' | 'OPERATOR',
-        status: formData.status as 'ACTIVE' | 'SUSPENDED',
-      };
-      setUsers([...users, newUser]);
+    if (!isSupabaseConfigured()) return;
+
+    try {
+      if (editingUser) {
+        const { error } = await supabase
+          .from('users')
+          .update({
+            name: formData.name,
+            email: formData.email,
+            role: formData.role,
+            status: formData.status,
+          })
+          .eq('id', editingUser.id);
+        
+        if (error) throw error;
+      } else {
+        const operatorId = `OP_CORE_${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+        const { error } = await supabase
+          .from('users')
+          .insert([{
+            operator_id: operatorId,
+            name: formData.name,
+            email: formData.email,
+            role: formData.role,
+            status: formData.status,
+          }]);
+        
+        if (error) throw error;
+      }
+      setIsModalOpen(false);
+    } catch (error) {
+      console.error('Error saving user:', error);
+      alert('Erro ao guardar utilizador.');
     }
-    setIsModalOpen(false);
   };
 
-  const confirmDelete = () => {
-    if (deleteConfirmId) {
-      setUsers(users.filter(u => u.id !== deleteConfirmId));
-      setDeleteConfirmId(null);
+  const confirmDelete = async () => {
+    if (deleteConfirmId && isSupabaseConfigured()) {
+      try {
+        const { error } = await supabase
+          .from('users')
+          .delete()
+          .eq('id', deleteConfirmId);
+        
+        if (error) throw error;
+        setDeleteConfirmId(null);
+      } catch (error) {
+        console.error('Error deleting user:', error);
+        alert('Erro ao eliminar utilizador.');
+      }
     }
   };
 
@@ -117,7 +182,7 @@ export const ExplorerView = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            {[
+            {isSupabaseConfigured() ? [
               { label: 'Total Admins', value: users.filter(u => u.role === 'ADMIN').length, icon: Shield },
               { label: 'Operadores', value: users.filter(u => u.role === 'OPERATOR').length, icon: User },
               { label: 'Contas Ativas', value: users.filter(u => u.status === 'ACTIVE').length, icon: Verified },
@@ -134,7 +199,13 @@ export const ExplorerView = () => {
                   </div>
                 </Card>
               </div>
-            ))}
+            )) : (
+              <div className="col-span-4">
+                <Card variant="low" className="p-6 flex items-center justify-center h-32 border-b-2 border-primary/20">
+                  <p className="text-[10px] font-bold text-white/20 uppercase tracking-widest">Configuração Supabase Necessária para Estatísticas</p>
+                </Card>
+              </div>
+            )}
           </div>
         )}
       </header>
@@ -299,70 +370,83 @@ export const ExplorerView = () => {
                 <Filter className="w-4 h-4" />
               </Button>
             </div>
-            <Button variant="signal" onClick={() => handleOpenModal()}>
-              <UserPlus className="w-4 h-4 mr-2" />
-              NOVO UTILIZADOR
-            </Button>
+            {isSupabaseConfigured() && (
+              <Button variant="signal" onClick={() => handleOpenModal()}>
+                <UserPlus className="w-4 h-4 mr-2" />
+                NOVO UTILIZADOR
+              </Button>
+            )}
           </div>
 
-          <Card variant="low" className="overflow-hidden">
-            <table className="w-full text-left">
-              <thead className="bg-surface-high">
-                <tr>
-                  <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-widest">ID</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-widest">Nome / Email</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-widest">Nível de Acesso</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-widest">Status</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-widest text-right">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {users.map((user) => (
-                  <tr key={user.id} className="hover:bg-surface-container transition-colors group">
-                    <td className="px-6 py-5">
-                      <span className="text-xs font-mono text-primary font-bold">{user.id}</span>
-                    </td>
-                    <td className="px-6 py-5">
-                      <div className="flex flex-col">
-                        <span className="text-sm font-headline font-bold text-white uppercase">{user.name}</span>
-                        <span className="text-[10px] text-white/40 font-mono">{user.email}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-5">
-                      <div className={`inline-flex items-center gap-2 px-3 py-1 text-[10px] font-bold tracking-widest uppercase ${user.role === 'ADMIN' ? 'bg-primary/20 text-primary' : 'bg-surface-highest text-white/60'}`}>
-                        {user.role === 'ADMIN' ? <ShieldCheck className="w-3 h-3" /> : <User className="w-3 h-3" />}
-                        {user.role}
-                      </div>
-                    </td>
-                    <td className="px-6 py-5">
-                      <div className="flex items-center gap-2">
-                        <div className={`w-1.5 h-1.5 rounded-full ${user.status === 'ACTIVE' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500'}`}></div>
-                        <span className={`text-[10px] font-bold tracking-widest uppercase ${user.status === 'ACTIVE' ? 'text-green-500' : 'text-red-500'}`}>
-                          {user.status}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-5 text-right">
-                      <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button 
-                          onClick={() => handleOpenModal(user)}
-                          className="p-2 bg-surface-highest text-white/60 hover:text-primary transition-colors"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button 
-                          onClick={() => setDeleteConfirmId(user.id)}
-                          className="p-2 bg-surface-highest text-white/60 hover:text-red-500 transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
+          {!isSupabaseConfigured() ? (
+            <Card variant="high" className="p-12 text-center border-t-4 border-primary">
+              <Shield className="w-16 h-16 text-primary/40 mx-auto mb-6" />
+              <h2 className="text-2xl font-headline font-black text-white uppercase mb-4">Configuração Necessária</h2>
+              <p className="text-white/60 max-w-md mx-auto mb-8 uppercase tracking-widest text-xs leading-relaxed">
+                O sistema de gestão de utilizadores requer uma ligação ao Supabase. 
+                Por favor, configure as variáveis de ambiente <code className="text-primary">VITE_SUPABASE_URL</code> e <code className="text-primary">VITE_SUPABASE_ANON_KEY</code> nas definições do projeto.
+              </p>
+            </Card>
+          ) : (
+            <Card variant="low" className="overflow-hidden">
+              <table className="w-full text-left">
+                <thead className="bg-surface-high">
+                  <tr>
+                    <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-widest">ID</th>
+                    <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-widest">Nome / Email</th>
+                    <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-widest">Nível de Acesso</th>
+                    <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-widest">Status</th>
+                    <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-widest text-right">Ações</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </Card>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {users.map((user) => (
+                    <tr key={user.id} className="hover:bg-surface-container transition-colors group">
+                      <td className="px-6 py-5">
+                        <span className="text-xs font-mono text-primary font-bold">{user.operator_id}</span>
+                      </td>
+                      <td className="px-6 py-5">
+                        <div className="flex flex-col">
+                          <span className="text-sm font-headline font-bold text-white uppercase">{user.name}</span>
+                          <span className="text-[10px] text-white/40 font-mono">{user.email}</span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-5">
+                        <div className={`inline-flex items-center gap-2 px-3 py-1 text-[10px] font-bold tracking-widest uppercase ${user.role === 'ADMIN' ? 'bg-primary/20 text-primary' : 'bg-surface-highest text-white/60'}`}>
+                          {user.role === 'ADMIN' ? <ShieldCheck className="w-3 h-3" /> : <User className="w-3 h-3" />}
+                          {user.role}
+                        </div>
+                      </td>
+                      <td className="px-6 py-5">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-1.5 h-1.5 rounded-full ${user.status === 'ACTIVE' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-red-500'}`}></div>
+                          <span className={`text-[10px] font-bold tracking-widest uppercase ${user.status === 'ACTIVE' ? 'text-green-500' : 'text-red-500'}`}>
+                            {user.status}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-5 text-right">
+                        <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button 
+                            onClick={() => handleOpenModal(user)}
+                            className="p-2 bg-surface-highest text-white/60 hover:text-primary transition-colors"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button 
+                            onClick={() => setDeleteConfirmId(user.id)}
+                            className="p-2 bg-surface-highest text-white/60 hover:text-red-500 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          )}
         </div>
       )}
 

@@ -1,25 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ShieldCheck, UserPlus, Trash2, Edit2, Shield, User, Lock, MoreVertical, Search, Filter } from 'lucide-react';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 interface UserData {
   id: string;
+  operator_id: string;
   name: string;
   email: string;
   role: 'ADMIN' | 'OPERATOR';
   status: 'ACTIVE' | 'SUSPENDED';
-  lastLogin: string;
+  last_login: string;
 }
 
-const INITIAL_USERS: UserData[] = [
-  { id: 'OP_CORE_01', name: 'Rita Saraiva', email: 'ritadbsaraiva@gmail.com', role: 'ADMIN', status: 'ACTIVE', lastLogin: '2026-03-24 10:13' },
-  { id: 'OP_CORE_02', name: 'Marcus Viana', email: 'viana.m@kinetic.io', role: 'OPERATOR', status: 'ACTIVE', lastLogin: '2026-03-23 15:45' },
-  { id: 'OP_CORE_03', name: 'Elena Petrova', email: 'petrova.e@kinetic.io', role: 'OPERATOR', status: 'SUSPENDED', lastLogin: '2026-03-20 09:12' },
-];
-
 export const SecurityView = () => {
-  const [users, setUsers] = useState<UserData[]>(INITIAL_USERS);
+  const [users, setUsers] = useState<UserData[]>([]);
+  const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserData | null>(null);
   const [formData, setFormData] = useState<Partial<UserData>>({
@@ -30,6 +27,72 @@ export const SecurityView = () => {
   });
 
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) {
+      setLoading(false);
+      return;
+    }
+
+    fetchUsers();
+    
+    // Subscribe to real-time changes
+    const subscription = supabase
+      .channel('public:users')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => {
+        fetchUsers();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(subscription);
+    };
+  }, []);
+
+  const fetchUsers = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setUsers(data || []);
+    } catch (error) {
+      console.error('Error fetching users:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isSupabaseConfigured()) {
+    return (
+      <div className="space-y-8 animate-in fade-in duration-500">
+        <div className="flex justify-between items-end">
+          <div>
+            <h1 className="text-5xl font-headline font-black tracking-tighter text-white uppercase mb-2">
+              SECURITY_<span className="text-primary">CORE</span>
+            </h1>
+            <p className="text-white/40 font-body text-sm tracking-widest uppercase">
+              Administração de Utilizadores e Protocolos de Acesso
+            </p>
+          </div>
+        </div>
+        <Card variant="high" className="p-12 text-center border-t-4 border-primary">
+          <Shield className="w-16 h-16 text-primary/40 mx-auto mb-6" />
+          <h2 className="text-2xl font-headline font-black text-white uppercase mb-4">Configuração Necessária</h2>
+          <p className="text-white/60 max-w-md mx-auto mb-8 uppercase tracking-widest text-xs leading-relaxed">
+            O sistema de gestão de utilizadores requer uma ligação ao Supabase. 
+            Por favor, configure as variáveis de ambiente <code className="text-primary">VITE_SUPABASE_URL</code> e <code className="text-primary">VITE_SUPABASE_ANON_KEY</code> nas definições do projeto.
+          </p>
+          <div className="inline-flex items-center gap-2 px-4 py-2 bg-surface-highest text-[10px] font-bold text-white/40 tracking-widest uppercase">
+            <Lock className="w-3 h-3" />
+            Acesso Restrito até Configuração
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   const handleOpenModal = (user?: UserData) => {
     if (user) {
@@ -47,28 +110,56 @@ export const SecurityView = () => {
     setEditingUser(null);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingUser) {
-      setUsers(users.map(u => u.id === editingUser.id ? { ...u, ...formData } as UserData : u));
-    } else {
-      const newUser: UserData = {
-        id: `OP_CORE_${(users.length + 1).toString().padStart(2, '0')}`,
-        name: formData.name || '',
-        email: formData.email || '',
-        role: formData.role as 'ADMIN' | 'OPERATOR',
-        status: formData.status as 'ACTIVE' | 'SUSPENDED',
-        lastLogin: 'NEVER',
-      };
-      setUsers([...users, newUser]);
+    try {
+      if (editingUser) {
+        const { error } = await supabase
+          .from('users')
+          .update({
+            name: formData.name,
+            email: formData.email,
+            role: formData.role,
+            status: formData.status,
+          })
+          .eq('id', editingUser.id);
+        
+        if (error) throw error;
+      } else {
+        const operatorId = `OP_CORE_${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+        const { error } = await supabase
+          .from('users')
+          .insert([{
+            operator_id: operatorId,
+            name: formData.name,
+            email: formData.email,
+            role: formData.role,
+            status: formData.status,
+          }]);
+        
+        if (error) throw error;
+      }
+      handleCloseModal();
+    } catch (error) {
+      console.error('Error saving user:', error);
+      alert('Erro ao guardar utilizador. Verifique as permissões.');
     }
-    handleCloseModal();
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (deleteConfirmId) {
-      setUsers(users.filter(u => u.id !== deleteConfirmId));
-      setDeleteConfirmId(null);
+      try {
+        const { error } = await supabase
+          .from('users')
+          .delete()
+          .eq('id', deleteConfirmId);
+        
+        if (error) throw error;
+        setDeleteConfirmId(null);
+      } catch (error) {
+        console.error('Error deleting user:', error);
+        alert('Erro ao eliminar utilizador.');
+      }
     }
   };
 
@@ -152,7 +243,7 @@ export const SecurityView = () => {
               {users.map((user) => (
                 <tr key={user.id} className="hover:bg-white/5 transition-colors group">
                   <td className="px-6 py-4">
-                    <span className="text-xs font-mono text-primary font-bold">{user.id}</span>
+                    <span className="text-xs font-mono text-primary font-bold">{user.operator_id}</span>
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex flex-col">
@@ -175,7 +266,9 @@ export const SecurityView = () => {
                     </div>
                   </td>
                   <td className="px-6 py-4">
-                    <span className="text-[10px] font-mono text-white/40 uppercase">{user.lastLogin}</span>
+                    <span className="text-[10px] font-mono text-white/40 uppercase">
+                        {user.last_login ? new Date(user.last_login).toLocaleString() : 'NEVER'}
+                      </span>
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
